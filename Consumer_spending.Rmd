@@ -1,0 +1,302 @@
+---
+title: "Consumer Spending"
+output: html_document
+date: "2025-06-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+```
+
+```{r}
+library(tidyverse)
+library(MASS)
+library(nlme)
+library(corrplot)
+library(car)
+library(lmtest)   
+
+library(leaps)
+```
+
+
+
+```{r}
+spending_data <- read.csv("/Users/calvinkapral/Downloads/Percent_Change_in_Consumer_Spending.csv")
+
+
+spending_data <- rename(spending_data,
+  all_merchant = All.merchant.category.codes.spending,
+  acf_spending = Accommodation.and.food.service..ACF..spending,
+  aer_spending = Arts..entertainment..and.recreation..AER...spending,
+  gen_spending = General.merchandise.stores..GEN..and.apparel.and.accessories..AAP..spending,
+  grf_spending = Grocery.and.food.store..GRF...spending,
+  hcs_spending = Health.care.and.social.assistance..HCS..spending
+)
+
+subset_data <- spending_data[, c("all_merchant", "acf_spending", "aer_spending", "grf_spending", "hcs_spending", "gen_spending")]
+
+summary(subset_data)
+
+model <- lm(acf_spending ~ all_merchant + aer_spending + gen_spending + grf_spending + hcs_spending, data = subset_data)
+
+summary(model)
+
+pairs(subset_data, main = "Scalerplot Matrix")
+```
+
+
+
+
+
+```{r}
+
+fit <- lm(acf_spending ~ all_merchant + aer_spending + gen_spending + grf_spending + hcs_spending, data = spending_data)
+
+n <- nrow(spending_data)                  # Number of observations
+p <- length(coefficients(fit))           # Number of parameters (includes intercept)
+
+# (a) Check constant variance (homoscedasticity)
+
+# Residual plot
+plot(fitted(fit), residuals(fit), 
+     xlab = "Fitted Values", 
+     ylab = "Residuals", 
+     main = "Residuals vs Fitted")
+abline(h = 0, col = "red")
+
+# Absolute residuals vs fitted values
+plot(fitted(fit), abs(residuals(fit)), 
+     xlab = "Fitted Values", 
+     ylab = "Absolute Residuals", 
+     main = "Absolute Residuals vs Fitted")
+abline(h = 0, col = "blue")
+
+# Optional: formal test for trend in residual spread
+summary(lm(abs(residuals(fit)) ~ fitted(fit)))
+
+# (b) Check normality of residuals
+qqnorm(residuals(fit), main = "Q-Q Plot of Residuals", ylab = "Residuals")
+qqline(residuals(fit), col = "red")
+
+hist(residuals(fit), main = "Histogram of Residuals", xlab = "Residuals")
+
+
+shapiro.test(residuals(fit))  
+
+
+
+# (c) Leverage: detect high-leverage points
+leverage_vals <- lm.influence(fit)$hat
+plot(leverage_vals, ylab = "Leverage", main = "Leverage Values")
+abline(h = 2 * p / n, col = "red", lty = 2)
+
+# Print rows with high leverage
+which_high_leverage <- which(leverage_vals > 2 * p / n)
+print(leverage_vals[which_high_leverage])
+
+
+# (d) Outliers in y-direction: Studentized residuals
+jack <- rstudent(fit)
+max_jack <- jack[which.max(abs(jack))]
+print(max_jack)
+
+# Bonferroni critical value for outlier test
+bonf_crit <- qt(1 - 0.05 / (2 * n), df = n - p)
+print(bonf_crit)
+
+
+# (e) Influential points: Cook's Distance
+cook <- cooks.distance(fit)
+plot(cook, type = "h", main = "Cook's Distance", ylab = "Cook's D")
+abline(h = 4 / n, col = "red", lty = 2)  # Rule of thumb
+
+# Most influential point
+most_influential <- which.max(cook)
+print(cook[most_influential])
+
+
+
+```
+
+```{r}
+
+spending_data_positive <- subset(spending_data, acf_spending > 0)
+
+fit_positive <- lm(acf_spending ~ all_merchant + aer_spending + gen_spending + grf_spending + hcs_spending, data = spending_data_positive)
+summary(fit_positive)
+
+boxcox(fit_positive, plotit = TRUE)
+boxcox(fit_positive, plotit = TRUE, lambda = seq(0.55, 0.85, by = 0.025))
+
+fit_transform <- lm(acf_spending^(2/3) ~ all_merchant + aer_spending + gen_spending + grf_spending + hcs_spending, data = spending_data_positive)
+summary(fit_transform)
+
+
+```
+
+
+```{r}
+
+x <- seq(1,n)
+plot(x, fit$residuals)
+abline(h=0)
+acf(fit$residuals, main = "AR1 error")
+fitnlme <- gls(acf_spending ~ all_merchant + aer_spending + gen_spending+ grf_spending+ hcs_spending, data = spending_data, method = "ML", correlation =corARMA(p=1)
+               )
+
+summary(fitnlme)
+intervals(fitnlme)
+
+```
+
+
+
+```{r}
+
+# Individual Breusch-Pagan tests
+all_spending_test <- bptest(model, ~ all_merchant, data = spending_data) 
+aer_spending_test <- bptest(model, ~ aer_spending, data = spending_data)
+gen_spending_test <- bptest(model, ~ gen_spending, data = spending_data) 
+grf_spending_test <- bptest(model, ~ grf_spending, data = spending_data) 
+hcs_spending_test <- bptest(model, ~ hcs_spending, data = spending_data)
+
+# Residual plot vs. one predictor
+residuals <- resid(model)
+plot(spending_data$aer_spending, residuals^2,
+     xlab = "Predictor Variable",
+     ylab = "Squared Residuals",
+     main = "Residual Variance vs. Arts Variable", cex = 0.15)
+abline(lm(I(residuals^2) ~ spending_data$aer_spending), col = "red")
+
+# Create fitted values and group variable
+spending_data$fitted_values <- predict(model) 
+spending_data$group <- cut(spending_data$fitted_values, breaks = 5)
+
+# Compute group-wise statistics
+group_stats <- spending_data %>%
+  group_by(group) %>%
+  summarize(mean_fitted = mean(fitted_values),
+            var_residuals = var(resid(model)), 
+            n = n())
+
+# Fit variance model
+var_model <- lm(var_residuals ~ mean_fitted, data = group_stats)
+
+# Calculate weights and fit WLS model
+spending_data$weights <- 1 / predict(var_model, newdata = data.frame(mean_fitted = spending_data$fitted_values))
+wls_model <- lm(acf_spending ~ all_merchant + aer_spending + gen_spending + grf_spending + hcs_spending, 
+                data = spending_data, weights = weights)
+summary(wls_model)
+
+```
+
+
+
+```{r}
+
+vif_values <- vif(model)
+vif_values
+predictors <- spending_data[, c("all_merchant", "aer_spending", "gen_spending", "grf_spending", "hcs_spending")]
+cor_matrix <- cor(predictors) 
+cor_matrix
+corrplot(cor_matrix, method = "circle", type = "upper", tl.col = "black", tl.srt = 45)
+
+```
+
+```{r}
+response_var<- "acf_spending"
+formula <- as.formula(paste(response_var, "~", paste(predictors, collapse = " + ")))
+best_subset <- regsubsets(formula, data = spending_data, nbest = 1, method = "exhaustive")
+summary_best_subset <- summary(best_subset) 
+print(summary_best_subset)
+
+par(mfrow = c(1, 2))
+plot(best_subset, scale = "adjr2", main = "Adjusted R-squared") 
+plot(best_subset, scale = "Cp", main = "Mallow's Cp")
+
+
+# Identify the best model
+best_model_index <- which.max(summary_best_subset$adjr2) 
+best_model <- summary_best_subset$outmat[best_model_index, ]
+# Print the best model
+cat("Best model based on Adjusted R-squared:")
+best_model
+```
+
+
+```{r}
+
+data <- spending_data %>%
+mutate(Date = as.Date(Date, format = "%m/%d/%Y"))
+head(data)
+
+
+full_model <- lm(acf_spending ~ all_merchant + aer_spending + gen_spending + grf_spending + hcs_spending, data = data)
+backward_model <- step(full_model, direction = "backward")
+null_model <- lm(acf_spending ~ 1, data = data)
+forward_model <- step(null_model, scope = formula(full_model), direction = "forward")
+summary(backward_model) summary(forward_model)
+AIC(backward_model, forward_model)
+
+```
+
+
+```{r}
+
+reduced_fit <- lm(acf_spending ~ aer_spending + grf_spending, data = data)
+
+plot(fitted(reduced_fit), residuals(reduced_fit), xlab = "Fitted", ylab = "Residuals") abline(h = 0, col = "red")
+
+plot(fitted(reduced_fit), abs(residuals(reduced_fit)), xlab = "Fitted", ylab = "Absolute Residuals") abline(h = 0, col = "red")
+
+print(summary(lm(abs(residuals(reduced_fit)) ~ fitted(reduced_fit))))
+
+qqnorm(residuals(reduced_fit), ylab = "Residuals") qqline(residuals(reduced_fit), col = "red")
+
+hist(residuals(reduced_fit), main = "Histogram of Residuals", xlab = "Residuals", breaks = 20)
+shapiro.test(residuals(reduced_fit))
+
+leverage_values <- lm.influence(reduced_fit)$hat
+
+p <- length(coefficients(reduced_fit))
+
+n <- nrow(data)
+
+plot(leverage_values, ylab = "Leverage")
+
+abline(h = 2 * p / n, col = "red")
+high_leverage_points <- which(leverage_values > 2 * p / n)
+
+print(high_leverage_points)
+rstudent_residuals <- rstudent(reduced_fit)
+print(rstudent_residuals[which.max(abs(rstudent_residuals))])
+
+bonferroni_threshold <- qt(0.05 / (2 * n), df = n - p - 1) 
+print(bonferroni_threshold)
+
+cooks_distances <- cooks.distance(reduced_fit)
+
+plot(cooks_distances, ylab = "Cook's Distance") abline(h = 4 / n, col = "red")
+influential_points <- which(cooks_distances > 4 / n)
+
+print(influential_points)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
